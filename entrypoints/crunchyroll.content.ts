@@ -1,9 +1,11 @@
-import type { ContentScriptContext } from "#imports"
+import type { ContentScriptContext, IntegratedContentScriptUi } from "#imports"
+import type { TypedDocumentNode } from '@graphql-typed-document-node/core'
+import { waitElement } from '@1natsu/wait-element'
+import { parse } from 'graphql'
 import { gql, GraphQLClient } from 'graphql-request'
 
-import anilistLogo from '~/assets/anilist.svg'
+import anilistLogo from '~/assets/anilist.svg?raw'
 
-const client = new GraphQLClient('https://https://graphql.anilist.co')
 
 interface Media {
   id: number
@@ -15,61 +17,137 @@ interface Media {
   siteUrl: string
 }
 
-async function searchAnimeByName(name: string): Promise<Media> {
-  return client.request<Media>(gql`
-    query searchAnime($search: String) {
-      Media(search: $search, type: ANIME) {
-        id
-        title {
-          english
-          native
-          romaji
-        }
-        siteUrl
+
+const client = new GraphQLClient('https://graphql.anilist.co')
+
+const searchAnimeQuery: TypedDocumentNode<{ Media: Media }, { search: string }> = parse(gql`
+  query searchAnime($search: String) {
+    Media(search: $search, type: ANIME) {
+      id
+      title {
+        english
+        native
+        romaji
       }
+      siteUrl
     }
-    `
+  }
+  `)
+
+const CACHE: Record<string, Media> = {}
+
+async function searchAnimeByName(name: string): Promise<{Media: Media}> {
+  if (name in CACHE) {
+    return { Media: CACHE[name] }
+  }
+
+  const { Media } = await client.request(searchAnimeQuery, {
+      search: name
+    }
   )
+
+  CACHE[name] = Media
+  return { Media: Media }
 }
 
-const seriesPattern = new MatchPattern('*://*.crunchyroll.com/*/series/*');
+const homePattern = new MatchPattern('*://*.crunchyroll.com/*/')
+const seriesPattern = new MatchPattern('*://*.crunchyroll.com/*/series/*')
 const watchPattern = new MatchPattern('*://*.crunchyroll.com/*/watch/*')
 
 export default defineContentScript({
   matches: ['*://*.crunchyroll.com/*'],
-  main(ctx) {
-    ctx.addEventListener(window, 'wxt:locationchange', async ({ newUrl }) => {
-      console.log('New url ', newUrl)
-      if (seriesPattern.includes(newUrl)) {
-        await mainSeries(ctx)
-      }
-    })
+  runAt: 'document_end',
+  async main(ctx) {
+    async function handler({ newUrl }: { newUrl: URL }) {
 
-    console.log('Hello content.');
+      console.log('new url!', newUrl)
+
+      if (seriesPattern.includes(newUrl)) {
+        // await mainSeries(ctx)
+      }
+      else if (watchPattern.includes(newUrl)) {
+        await mainWatch(ctx)
+      }
+      else if (homePattern.includes(newUrl)) {
+        await mainHome(ctx)
+      }
+    }
+
+    ctx.addEventListener(window, 'wxt:locationchange', handler)
+    await handler({ newUrl: new URL(location.href) })
   },
 });
 
-function createAnilistAnchor(href: string): Element {
+function createAnilistButton(href: string): Element {
   const anchor = document.createElement('a')
   anchor.href = href
-  const logo = document.createElement('object')
-  logo.setAttribute('src', anilistLogo)
-  anchor.append(logo)
+  anchor.target = '_blank'
+  anchor.rel = 'noopener noreferrer'
+  anchor.innerHTML = anilistLogo
+  const svg = anchor.firstChild as SVGElement
+  svg.setAttribute('width', '40')
+  svg.setAttribute('height', '40')
   return anchor
 }
 
-async function mainSeries(ctx: ContentScriptContext) {
-  const route = window.location.href.split('/')
-  const searchTerm = route[route.indexOf('series') + 2]
-  const anime = await searchAnimeByName(searchTerm)
-  console.log(anime)
-  const ui = createIntegratedUi(ctx, {
-    position: 'inline',
-    anchor: '.bottom-actions-wrapper',
-    onMount: (container) => {
-      const anchor = createAnilistAnchor(anime.siteUrl)
-      container.insertBefore(anchor, container.childNodes[1])
-    },
+function hasTextContent(node: Element): node is Element & { textContent: string } {
+  return !!node.textContent
+}
+
+async function mainHome(ctx: ContentScriptContext) {
+  // find all names of the wrapper
+  let hero: Element | null = null
+  const mountedUis = new Map<Element, IntegratedContentScriptUi<void>>()
+
+  const heroObserver = new MutationObserver(async (mutations, observer) => {
+    const newHero = document.querySelector('div[class^=hero-carousel__cards]')
+    if (hero && !newHero) {
+      for (const [_key, ui] of mountedUis) {
+        ui.remove()
+      }
+      observer.disconnect()
+      return
+    }
+    if (!newHero || hero === newHero) return
+
+    hero = newHero
+
+    const nodes = hero.querySelectorAll('h2[class^=hero-content-card__seo-title]')
+
+    const results = await Promise.all(
+      Array.from(nodes).filter(hasTextContent).map(async node => {
+        try {
+          const result = await searchAnimeByName(node.textContent)
+          return { node, media: result?.Media }
+        } catch (e) {
+          console.log(e)
+          return Promise.reject(e)
+        }
+      })
+    )
+
+    for (const { node, media } of results) {
+      if (!media) continue
+
+      console.log('creating ui for ', media)
+
+      const ui = createIntegratedUi(ctx, {
+        position: 'inline',
+        anchor: node.parentElement?.parentElement?.querySelector('div[class^=hero-content-card__footer] div'),
+        onMount: (container) => {
+          const root = createAnilistButton(media.siteUrl)
+          container.append(root)
+        }
+      })
+
+      ui.mount()
+      mountedUis.set(node, ui)
+    }
   })
-  ui.mount()
+
+  heroObserver.observe(document.body, {subtree: true, childList: true})
+}
+
+async function mainWatch(ctx: ContentScriptContext) {
+  console.log('undefined')
 }

@@ -1,8 +1,8 @@
 {
-  "name": "wxt-starter",
-  "description": "manifest.json description",
+  "name": "anilink-for-crunchyroll",
+  "description": "Adds a small button to the Crunchyroll website to get to the corresponding AniList Anime site.",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -19,6 +19,9 @@
     "wxt": "^0.20.0"
   },
   "dependencies": {
+    "@1natsu/wait-element": "^4.1.2",
+    "@graphql-typed-document-node/core": "^3.2.0",
+    "graphql": "^16.10.0",
     "graphql-request": "^7.1.2"
   }
 }
