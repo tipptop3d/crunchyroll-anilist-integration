@@ -84,6 +84,7 @@ function createAnilistButton(href: string): Element {
   anchor.target = '_blank'
   anchor.rel = 'noopener noreferrer'
   anchor.innerHTML = anilistLogo
+  anchor.style.display = 'inline-flex'
   const svg = anchor.firstChild as SVGElement
   svg.setAttribute('width', '40')
   svg.setAttribute('height', '40')
@@ -95,12 +96,12 @@ function hasTextContent(node: Element): node is Element & { textContent: string 
 }
 
 async function mainHome(ctx: ContentScriptContext) {
-  // find all names of the wrapper
   let hero: Element | null = null
   const mountedUis = new Map<Element, IntegratedContentScriptUi<void>>()
 
   const heroObserver = new MutationObserver(async (mutations, observer) => {
     const newHero = document.querySelector('div[class^=hero-carousel__cards]')
+    // when our Hero disappears, demount all uis and stop listening for hero changes
     if (hero && !newHero) {
       for (const [_key, ui] of mountedUis) {
         ui.remove()
@@ -108,12 +109,14 @@ async function mainHome(ctx: ContentScriptContext) {
       observer.disconnect()
       return
     }
+    // when no hero is there or it is the same as before, we don't need to do anything
     if (!newHero || hero === newHero) return
-
     hero = newHero
 
+    // get all anime titles of the hero. Let's hope they are hydrated until now.
     const nodes = hero.querySelectorAll('h2[class^=hero-content-card__seo-title]')
 
+    // Search for anilist links using AniList API
     const results = await Promise.all(
       Array.from(nodes).filter(hasTextContent).map(async node => {
         try {
@@ -126,16 +129,18 @@ async function mainHome(ctx: ContentScriptContext) {
       })
     )
 
+    // build ui
     for (const { node, media } of results) {
       if (!media) continue
-
-      console.log('creating ui for ', media)
 
       const ui = createIntegratedUi(ctx, {
         position: 'inline',
         anchor: node.parentElement?.parentElement?.querySelector('div[class^=hero-content-card__footer] div'),
         onMount: (container) => {
           const root = createAnilistButton(media.siteUrl)
+          container.style.display = 'flex'
+          container.style.marginTop = '5px'
+          container.style.marginBottom = '5px'
           container.append(root)
         }
       })
